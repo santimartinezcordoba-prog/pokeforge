@@ -1,0 +1,11 @@
+{
+  "name": "ciega-relay",
+  "compatibility_date": "2026-10-23",
+  "main": "js/server/relay-worker.js",
+  "kv_namespaces": [
+    {
+      "binding": "rooms",
+      "id": "2482720c1a4544c793a6b37d1bcfe8c0"
+    }
+  ]
+}
