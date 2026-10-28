@@ -3,6 +3,7 @@ import http from 'node:http';
 import { randomBytes } from 'node:crypto';
 const PORT = process.env.PORT || 8787;
 const rooms = new Map(); // id -> {host:{secret,team,name}, guest:{secret,team,name}}
+const pastes = new Map(); // pid -> {team,name,created}
 const sec = () => randomBytes(16).toString('hex');
 const genId = () => {const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='';for(let i=0;i<8;i++)s+=c[Math.floor(Math.random()*c.length)];return s.slice(0,4)+'-'+s.slice(4)};
 
@@ -16,6 +17,8 @@ http.createServer((req,res)=>{
       if(req.url==='/api/create'){const id=genId(),secret=sec();rooms.set(id,{host:{secret,team:j.team||null,name:j.name||'Anfitrión'},guest:null});send({id,secret,role:'host'})}
       else if(req.url==='/api/join'){const r=rooms.get(j.id);if(!r)return send({error:'Sala no encontrada'},404);if(r.guest)return send({error:'Sala llena'},409);const g={secret:sec(),team:null,name:j.name||'Rival'};r.guest=g;send({secret:g.secret})}
       else if(req.url==='/api/submit'){const r=rooms.get(j.id);if(!r)return send({error:'Sala no encontrada'},404);const slot=r.host.secret===j.secret?'host':(r.guest&&r.guest.secret===j.secret?'guest':null);if(!slot)return send({error:'Credencial inválida'},403);r[slot].team=j.team;r[slot].name=j.name||r[slot].name;send({ok:true})}
+      else if(req.url==='/api/paste.save'){const team=String(j.team||'').slice(0,20000);if(!team.trim())return send({error:'Equipo vacío'},400);const c='abcdefghjkmnpqrstuvwxyz23456789';let pid='';for(let i=0;i<8;i++)pid+=c[Math.floor(Math.random()*c.length)];pastes.set(pid,{team,name:String(j.name||'Anon').slice(0,40),created:Date.now()});send({ok:true,pid})}
+      else if(req.url==='/api/paste.get'){const pid=String(j.pid||'').slice(0,16);const p=pastes.get(pid);if(!p)return send({error:'Paste no encontrado'},404);send({ok:true,pid,team:p.team,name:p.name})}
       else if(req.url==='/api/peek'){const r=rooms.get(j.id);if(!r)return send({error:'Sala no encontrada'},404);const me=r.host.secret===j.secret?'host':(r.guest&&r.guest.secret===j.secret?'guest':null);if(!me)return send({error:'Credencial inválida'},403);const other=me==='host'?'guest':'host';const mine=r[me].team;const hasBoth=mine&&r[other]&&r[other].team;
         send({status:!r[other]?'waiting':(hasBoth?'revealed':'pending'),you:mine,youName:r[me].name,them:hasBoth?r[other].team:null,themName:r[other]?r[other].name:null,role:me});}
       else send({error:'ruta desconocida'},404);

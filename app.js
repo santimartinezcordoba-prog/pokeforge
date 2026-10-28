@@ -673,10 +673,12 @@ const Store = (() => {
     },
     on,
     emit,
-    create:(t, n) => rel('/api/create', { p1Name:n }).then(j => ({ id:j.code, secret:j.side, role:'host' })),
-    join:(id) => rel('/api/join', { room:id }).then(j => ({ id:j.code, secret:j.side, role:'guest' })),
-    submit:(id, sk, t, n) => rel('/api/submit', { room:id, side:sk, team:t, name:n }),
-    peek:(id, sk) => rel('/api/peek', { room:id, side:sk }),
+    create:(t, n) => rel('/api/create', { name:n, team:t ? (typeof t === 'string' ? t : exportTeam(t)) : null }).then(j => ({ id:j.id, secret:j.secret, role:j.role || 'host' })),
+    join:(id) => rel('/api/join', { id }).then(j => ({ id, secret:j.secret, role:j.role || 'guest' })),
+    submit:(id, sk, t, n) => rel('/api/submit', { id, secret:sk, team:t, name:n }),
+    peek:(id, sk) => rel('/api/peek', { id, secret:sk }),
+    pasteSave:(t, n) => rel('/api/paste.save', { team:t, name:n }),
+    pasteGet:(pid) => rel('/api/paste.get', { pid }),
     myRooms: () => [],
     forget() {}
   };
@@ -1015,7 +1017,8 @@ const routes = {
   dex:viewDex,
   ajustes:viewSettings,
   sala:renderRoomView,
-  editar:cpEditView
+  editar:cpEditView,
+  paste:pasteView
 };
 
 function nav() {
@@ -1078,7 +1081,7 @@ function viewBuilder() {
   const app = document.getElementById('app');
   app.innerHTML = '';
 
-  const tb = h('<div class="builder-top">' + (room ? '<span class="room-pill">🔑 <b>' + room.id + '</b></span><span class="badge badge-' + room.role + '">' + (room.role === 'host' ? 'Anfitrión' : 'Rival') + '</span>' : '<span class="badge badge-host">Borrador</span>') + '<div class="seg" id="segsize">' + [1,2,3,4,5,6].map(n => '<button data-n="' + n + '" class="' + (Settings.size === n ? 'on' : '') + '">' + n + '</button>').join('') + '</div><button class="btn btn-sm" id="btn-save">💾 Guardar</button><button class="btn btn-sm" id="btn-import">📥 Pegar paste</button><button class="btn btn-sm" id="btn-export">📋 Copiar</button><button class="btn btn-sm btn-ghost" id="btn-clear">🗑 Limpiar</button>' + (room ? '<button class="btn btn-sm btn-gold" id="btn-share">🔗 Compartir</button>' : '') + '<span class="evbudget" id="evb"></span><button class="btn btn-primary" id="btn-publish">' + (room ? (room.mineSent ? '⏳ Esperando al rival…' : (room.role === 'host' ? '↻ Actualizar' : '🔓 Enviar y desbloquear')) : '➕ Crear sala y publicar') + '</button></div>');
+  const tb = h('<div class="builder-top">' + (room ? '<span class="room-pill">🔑 <b>' + room.id + '</b></span><span class="badge badge-' + room.role + '">' + (room.role === 'host' ? 'Anfitrión' : 'Rival') + '</span>' : '<span class="badge badge-host">Borrador</span>') + '<div class="seg" id="segsize">' + [1,2,3,4,5,6].map(n => '<button data-n="' + n + '" class="' + (Settings.size === n ? 'on' : '') + '">' + n + '</button>').join('') + '</div><button class="btn btn-sm" id="btn-save">💾 Guardar</button><button class="btn btn-sm" id="btn-import">📥 Pegar paste</button><button class="btn btn-sm" id="btn-export">📋 Copiar</button><button class="btn btn-sm" id="btn-paste">🔗 Subir paste</button><button class="btn btn-sm btn-ghost" id="btn-clear">🗑 Limpiar</button>' + (room ? '<button class="btn btn-sm btn-gold" id="btn-share">🔗 Compartir</button>' : '') + '<span class="evbudget" id="evb"></span><button class="btn btn-primary" id="btn-publish">' + (room ? (room.mineSent ? '⏳ Esperando al rival…' : (room.role === 'host' ? '↻ Actualizar' : '🔓 Enviar y desbloquear')) : '➕ Crear sala y publicar') + '</button></div>');
   app.appendChild(tb);
 
   if (room) {
@@ -1100,6 +1103,7 @@ function viewBuilder() {
   tb.querySelector('#btn-import').onclick = openImport;
   tb.querySelector('#btn-save').onclick = saveCurrentTeam;
   tb.querySelector('#btn-export').onclick = () => copy(exportTeam(sets.filter(s => s.species)));
+  tb.querySelector('#btn-paste').onclick = () => cpPasteUpload(sets.filter(s => s.species));
   tb.querySelector('#btn-clear').onclick = () => {
     sets = sets.map(() => ({}));
     renderSlots();
@@ -1616,6 +1620,57 @@ async function doCreate(silent, team) {
   } catch (e) {
     toast(e.message || 'Error', 'bad');
   }
+}
+
+function pasteView(pid) {
+  const app = document.getElementById('app');
+  app.innerHTML = '<div class="waiting"><span class="pulse"></span> Cargando paste…</div>';
+
+  Store.pasteGet(pid).then(d => {
+    app.innerHTML = '';
+    const real = parseTeam(d.team || '');
+    const card = h('<div class="card" style="max-width:760px;margin:0 auto"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div><h3 style="margin:0">📋 Paste de ' + esc(d.name || 'Entrenador') + '</h3><div style="color:var(--dim);font-size:12px;font-family:var(--mono);margin-top:4px">' + esc(pid) + '</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-sm" id="pv-copy">📋 Copiar paste</button><button class="btn btn-sm btn-primary" id="pv-load">📥 Cargar en el editor</button></div></div><div style="margin-top:14px">' + pasteRender(real) + '</div></div>');
+    app.appendChild(card);
+    card.querySelector('#pv-copy').onclick = () => copy(d.team || '');
+    card.querySelector('#pv-load').onclick = () => {
+      sets = real.map(s => s);
+      while (sets.length < Settings.size) sets.push(blank());
+      openSlotOnRender = null;
+      location.hash = '#/constructor';
+      toast('Equipo cargado en el editor', 'ok');
+    };
+  }).catch(e => {
+    app.innerHTML = '';
+    app.appendChild(h('<div class="card"><h3>Paste no encontrado</h3><p style="color:var(--muted)">' + esc(e.message || 'El enlace es inválido o el paste caducó.') + '</p><a class="btn btn-primary" href="#/constructor">Ir al constructor</a></div>'));
+  });
+}
+
+function cpPasteUpload(realSets) {
+  const real = (realSets || []).filter(s => s.species);
+  if (!real.length) {
+    toast('No hay equipo que subir', 'warn');
+    return;
+  }
+
+  const txt = exportTeam(real);
+
+  Store.pasteSave(txt, Settings.name || 'Entrenador').then(d => {
+    const url = location.origin + location.pathname + '#/paste/' + d.pid;
+
+    modal(
+      '🔗 Paste subido',
+      '<p style="color:var(--muted)">Cualquiera con este enlace verá el equipo <b>' + real.length + '</b> Pokémon, igual que en pokepaste.</p><input type="text" readonly value="' + esc(url) + '" style="font-family:var(--mono);font-size:12px" id="cpPasteUrl"><div style="margin-top:12px;display:flex;gap:8px"><button class="btn btn-primary" data-c>🔗 Copiar enlace</button><button class="btn" data-o>Ver paste</button></div>',
+      back => {
+        back.querySelector('[data-c]').onclick = () => copy(url);
+        back.querySelector('[data-o]').onclick = () => {
+          back.remove();
+          location.hash = '#/paste/' + d.pid;
+        };
+      }
+    );
+  }).catch(e => {
+    toast(e.message || 'No se pudo subir el paste', 'bad');
+  });
 }
 
 function shareCode() {

@@ -360,6 +360,40 @@ export default {
       return json({ ok: true });
     }
 
+    if (url.pathname === "/api/paste.save") {
+      const team = String(j.team || "").slice(0, 20000);
+      if (!team.trim()) {
+        return json({ error: "Equipo vacío" }, 400);
+      }
+
+      const c = "abcdefghjkmnpqrstuvwxyz23456789";
+      let pid = "";
+      for (let i = 0; i < 8; i++) {
+        pid += c[Math.floor(Math.random() * c.length)];
+      }
+
+      await kv.put("paste:" + pid, JSON.stringify({
+        team,
+        name: String(j.name || "Anon").slice(0, 40),
+        created: Date.now()
+      }), {
+        expirationTtl: 60 * 60 * 24 * 30
+      });
+
+      return json({ ok: true, pid });
+    }
+
+    if (url.pathname === "/api/paste.get") {
+      const pid = String(j.pid || url.searchParams.get("pid") || "").slice(0, 16);
+      const p = await get("paste:" + pid);
+
+      if (!p) {
+        return json({ error: "Paste no encontrado" }, 404);
+      }
+
+      return json({ ok: true, pid, team: p.team, name: p.name });
+    }
+
     if (url.pathname === "/api/peek") {
       const r = await get(j.id);
 
