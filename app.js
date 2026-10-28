@@ -1013,6 +1013,7 @@ const routes = {
   inicio:viewHome,
   constructor:viewBuilder,
   equipos:cpRenderTeams,
+  calculadora:viewCalculadora,
   unirse:viewJoin,
   dex:viewDex,
   ajustes:viewSettings,
@@ -1802,6 +1803,7 @@ function renderRoomView() {
     sb.appendChild(h('<div class="waiting"><span class="pulse"></span> <b>' + esc(foeName()) + '</b> ya está dentro. <b>Sube tu equipo</b> para desbloquear.</div>'));
   } else if (room.status === 'revealed') {
     sb.appendChild(h('<div class="waiting" style="border-color:rgba(63,214,160,.5);background:rgba(63,214,160,.08);color:#bff3df"><span class="pulse" style="background:var(--ok)"></span> ✅ ¡Intercambio completado! <b>' + esc(myName()) + '</b> vs <b>' + esc(foeName()) + '</b></div>'));
+    app.appendChild(h('<div style="margin-bottom:14px"><a class="btn btn-primary" href="#/calculadora">⚔ Analizar duelos en la calculadora</a></div>'));
     app.appendChild(buildReveal());
     stopPoll();
     return;
@@ -1932,6 +1934,578 @@ function viewJoin(rest) {
     }
   };
 }
+
+/* ================= CALCULADORA DE DAÑO (calc.pokemonshowdown.com) ================= */
+function viewCalculadora() {
+  const app = document.getElementById('app');
+  app.innerHTML = '';
+
+  const C = window.PokemonCalc;
+  if (!C) {
+    app.appendChild(h('<div class="calc-wrap"><div class="card"><h3>⚙️ Cargando motor de cálculo…</h3><p style="color:var(--muted)">El bundle <code>js/pokemon-calc.bundle.js</code> (librería oficial <b>@smogon/calc</b>) no se ha podido cargar.</p></div></div>'));
+    return;
+  }
+
+  const { Generations, Pokemon, Move, Field, calculate, NATURES, STATS, calcStat } = C;
+
+  const GENS = [
+    { num: 1, label: 'RBY' },
+    { num: 2, label: 'GSC' },
+    { num: 3, label: 'ADV' },
+    { num: 4, label: 'DPP' },
+    { num: 5, label: 'BW' },
+    { num: 6, label: 'XY' },
+    { num: 7, label: 'SM' },
+    { num: 8, label: 'SS' },
+    { num: 9, label: 'SV' }
+  ];
+  const GEN_NAMES = ['', 'RBY', 'GSC', 'ADV', 'DPP', 'BW', 'XY', 'SM', 'SS', 'SV'];
+
+  let gen = 9;
+  let notation = '100';
+  const ST = () => STATS[gen] || STATS[9];
+  const isRBY = () => gen === 1 || gen === 2;
+  const statKey = k => (isRBY() && k === 'spa' ? 'spc' : k);
+
+  const state = {
+    p1: {},
+    p2: {},
+    moves1: [],
+    moves2: [],
+    sel1: 0,
+    sel2: 0,
+    field: {}
+  };
+
+  const blank = () => ({
+    name: '', level: 100, nature: 'Serious', ability: '', item: '', gender: '',
+    status: '', toxicCounter: 0, curHP: 0, dynamax: false, teraType: '',
+    ivs: { hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31 },
+    evs: { hp: 0, atk: 0, def: 0, spa: 0, spd: 0, spe: 0 }
+  });
+  state.p1 = blank();
+  state.p2 = blank();
+
+  const nameToID = n => {
+    const l = ('' + n).toLowerCase();
+    return l === 'flabébé' ? 'flabebe' : l.replace(/[^a-z0-9]+/g, '');
+  };
+  const cap = w => w.charAt(0).toUpperCase() + w.slice(1);
+  const pretty = id => id.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const capWords = s => String(s).split('-').map(cap).join(' ');
+  const titleCase = s => String(s).split(/[-\s]+/).map(cap).join(' ');
+
+  const listSpecies = () => { const a = []; for (const s of Generations.get(gen).species) a.push(s.name); return a; };
+  const listMoves = () => { const a = []; for (const m of Generations.get(gen).moves) a.push(m.name); return a; };
+  const listItems = () => { const a = []; for (const i of Generations.get(gen).items) a.push(i.name); return a; };
+  const listAbilities = () => { const a = []; for (const ab of Generations.get(gen).abilities) a.push(ab.name); return a; };
+  const listTypes = () => { const a = []; for (const t of Generations.get(gen).types) if (t.name !== '???') a.push(t.name); return a; };
+
+  const effVs = (types, t) => types.reduce((m, d) => Math.min(m, t.effectiveness[d] == null ? 1 : t.effectiveness[d]), 99);
+  const typeChartTable = () => {
+    const chart = C.TYPE_CHART[gen] || C.TYPE_CHART[9];
+    const ts = listTypes();
+    const cell = v => v === 0 ? '<span class="cm-x">0×</span>' : v === 0.5 ? '<span class="cm-h">½×</span>' : v === 2 ? '<span class="cm-s">2×</span>' : v === 4 ? '<span class="cm-s">4×</span>' : '<span class="cm-n">1×</span>';
+    return '<table class="chart"><thead><tr><th>Atq ↓ / Def →</th>' + ts.map(d => '<th class="tt-' + d.toLowerCase() + '">' + typeES(d) + '</th>').join('') + '</tr></thead><tbody>' +
+      ts.map(atk => {
+        const tdef = chart[atk];
+        return '<tr><td class="chart-atk tt-' + atk.toLowerCase() + '">' + typeES(atk) + '</td>' + ts.map(d => {
+          const v = tdef ? effVs([d], tdef) : 1;
+          return '<td class="chart-cell">' + cell(v) + '</td>';
+        }).join('') + '</tr>';
+      }).join('') + '</tbody></table>';
+  };
+
+  const effBadge = (pkmn, moveType) => {
+    if (!pkmn || !moveType || !pkmn.types) return '';
+    const chart = C.TYPE_CHART[gen] || C.TYPE_CHART[9];
+    const at = chart[moveType];
+    if (!at) return '';
+    const m = effVs(pkmn.types, at);
+    const txt = m === 0 ? 'inmune' : m === 0.25 ? '¼×' : m === 0.5 ? '½×' : m === 1 ? '1×' : m === 2 ? '2×' : m === 4 ? '4×' : String(m);
+    const cls = m === 0 ? 'immune' : m < 1 ? 'res' : m > 1 ? 'super' : 'nor';
+    return '<span class="calc-eff-badge ' + cls + '">' + txt + '</span>';
+  };
+
+  const makePokemon = (slot, usedItem) => {
+    const s = state[slot];
+    const opts = { level: s.level, nature: s.nature, ability: s.ability || undefined, moves: state[slot === 'p1' ? 'moves1' : 'moves2'].filter(Boolean) };
+    if (s.gender) opts.gender = s.gender;
+    if (s.status) opts.status = s.status;
+    if (s.status === 'Toxic') opts.toxicCounter = s.toxicCounter;
+    if (s.teraType) opts.teraType = s.teraType;
+    if (s.dynamax) opts.dynamax = true;
+    const ivs = {};
+    const evs = {};
+    for (const k of ST()) {
+      if (s.ivs[k] != null) ivs[k] = s.ivs[k];
+      if (s.evs[k] != null) evs[k] = s.evs[k];
+    }
+    if (gen <= 2) opts.dvs = ivs; else opts.ivs = ivs;
+    opts.evs = evs;
+    let item = s.item || undefined;
+    if (usedItem && item) item = Pokemon.getForme(gen, s.name, item, usedItem) === s.name ? item : undefined;
+    if (item) opts.item = item;
+    if (s.curHP > 0 && s.curHP < 99999) opts.curHP = s.curHP;
+    return new Pokemon(Generations.get(gen), s.name, opts);
+  };
+
+  const evTotal = s => ST().reduce((t, k) => t + (s.evs[k] || 0), 0);
+
+  const comboEl = (ph, items, onPick, value) => {
+    const wrap = h('<div class="combo combo-calc"><div class="combo-face"><input type="text" placeholder="' + esc(ph) + '" autocomplete="off"></div><div class="combo-pop"></div></div>');
+    const inp = wrap.querySelector('input');
+    const pop = wrap.querySelector('.combo-pop');
+    let list = [];
+    let idx = -1;
+    const draw = () => { pop.innerHTML = list.map((it, i) => '<div class="combo-op' + (i === idx ? ' sel' : '') + '" data-i="' + i + '">' + esc(it) + '</div>').join(''); };
+    const fill = q => {
+      const qq = nameToID(q || '');
+      list = items().filter(n => {
+        const id = nameToID(n);
+        return qq && (id.includes(qq) || qq.includes(id));
+      }).slice(0, 30);
+      idx = -1;
+      draw();
+      pop.classList.toggle('on', list.length > 0);
+    };
+    const close = () => pop.classList.remove('on');
+    inp.addEventListener('focus', () => fill(inp.value));
+    inp.addEventListener('input', () => { fill(inp.value); onPick(inp.value); });
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'ArrowDown') { idx = Math.min(idx + 1, list.length - 1); draw(); e.preventDefault(); }
+      else if (e.key === 'ArrowUp') { idx = Math.max(idx - 1, 0); draw(); e.preventDefault(); }
+      else if (e.key === 'Enter') { if (idx >= 0 && list[idx]) { inp.value = list[idx]; onPick(list[idx]); } close(); }
+      else if (e.key === 'Escape') close();
+    });
+    inp.addEventListener('blur', () => setTimeout(close, 120));
+    pop.addEventListener('mousedown', e => {
+      const o = e.target.closest('.combo-op');
+      if (o) { inp.value = list[+o.dataset.i]; onPick(inp.value); close(); e.preventDefault(); }
+    });
+    if (value != null) inp.value = value;
+    return wrap;
+  };
+
+  const numField = (label, val, min, max, step, onch, cls) => {
+    const el = h('<div class="field calc-n' + (cls ? ' ' + cls : '') + '"><label>' + esc(label) + '</label><input type="number" min="' + min + '" max="' + max + '" step="' + step + '" value="' + val + '"></div>');
+    el.querySelector('input').addEventListener('input', e => onch(parseFloat(e.target.value) || 0));
+    return el;
+  };
+  const checkField = (label, val, onch) => {
+    const el = h('<label class="calc-chk"><input type="checkbox"' + (val ? ' checked' : '') + '><span>' + esc(label) + '</span></label>');
+    el.querySelector('input').addEventListener('change', e => onch(e.target.checked));
+    return el;
+  };
+  const selectField = (label, options, val, onch) => {
+    const el = h('<div class="field"><label>' + esc(label) + '</label><select>' + options.map(o => '<option value="' + esc(String(o.v != null ? o.v : o)) + '"' + (String(o.v != null ? o.v : o) === String(val) ? ' selected' : '') + '>' + esc(String(o.t != null ? o.t : o)) + '</option>').join('') + '</select></div>');
+    el.querySelector('select').addEventListener('change', e => onch(e.target.value));
+    return el;
+  };
+
+  const swap = () => {
+    [state.p1, state.p2] = [state.p2, state.p1];
+    [state.moves1, state.moves2] = [state.moves2, state.moves1];
+    const f = state.field;
+    [f.isSR1, f.isSR2] = [f.isSR2, f.isSR1];
+    [f.spikes1, f.spikes2] = [f.spikes2, f.spikes1];
+    [f.steelsurge1, f.steelsurge2] = [f.steelsurge2, f.steelsurge1];
+    [f.reflect1, f.reflect2] = [f.reflect2, f.reflect1];
+    [f.screen1, f.screen2] = [f.screen2, f.screen1];
+    [f.protect1, f.protect2] = [f.protect2, f.protect1];
+    [f.seed1, f.seed2] = [f.seed2, f.seed1];
+    [f.salt1, f.salt2] = [f.salt2, f.salt1];
+    [f.foresight1, f.foresight2] = [f.foresight2, f.foresight1];
+    [f.tailwind1, f.tailwind2] = [f.tailwind2, f.tailwind1];
+    [f.help1, f.help2] = [f.help2, f.help1];
+    [f.aurora1, f.aurora2] = [f.aurora2, f.aurora1];
+    [f.powertrick1, f.powertrick2] = [f.powertrick2, f.powertrick1];
+    [f.steely1, f.steely2] = [f.steely2, f.steely1];
+    [f.battery1, f.battery2] = [f.battery2, f.battery1];
+    [f.powerspot1, f.powerspot2] = [f.powerspot2, f.powerspot1];
+    [f.charge1, f.charge2] = [f.charge2, f.charge1];
+    [f.flowergift1, f.flowergift2] = [f.flowergift2, f.flowergift1];
+    [f.switching1, f.switching2] = [f.switching2, f.switching1];
+  };
+
+  function renderMonPanel(idx) {
+    const slot = idx === 1 ? 'p1' : 'p2';
+    const s = state[slot];
+    const card = h('<div class="calc-mon"><div class="calc-head"><span class="spr-slot"></span><div><div class="calc-title">Pokémon ' + idx + '</div><div class="calc-sub" data-role="sub"></div></div><button class="icon-btn calc-x" title="Vaciar" style="margin-left:auto">✕</button></div></div>');
+    card.querySelector('.calc-x').onclick = () => {
+      state[slot] = blank();
+      state[idx === 1 ? 'moves1' : 'moves2'] = [ '', '', '', '' ];
+      render();
+    };
+
+    const grid = h('<div class="calc-form"></div>');
+    const nameWrap = comboEl('especie…', listSpecies, v => { s.name = v; recompute() }, s.name);
+    const fldName = h('<div class="field"><label>Pokémon</label></div>');
+    fldName.appendChild(nameWrap);
+    grid.appendChild(fldName);
+
+    grid.appendChild(selectField('Nivel', [{ v: 100, t: '100' }, { v: 50, t: '50' }, { v: 5, t: '5 (Modo Aleatorio)' }], s.level, v => { s.level = parseInt(v, 10) || 100; recompute() }));
+
+    const naturOpts = Object.keys(NATURES).sort();
+    grid.appendChild(selectField('Naturaleza', naturOpts, s.nature, v => { s.nature = v; recompute() }));
+
+    grid.appendChild(selectField('Género', ['', 'M', 'F'], s.gender, v => { s.gender = v; recompute() }));
+
+    const abWrap = comboEl('habilidad…', listAbilities, v => { s.ability = v; recompute() }, s.ability);
+    const fldAb = h('<div class="field"><label>Habilidad</label></div>');
+    fldAb.appendChild(abWrap);
+    grid.appendChild(fldAb);
+
+    const itWrap = comboEl('objeto…', listItems, v => { s.item = v; recompute() }, s.item);
+    const fldIt = h('<div class="field"><label>Objeto</label></div>');
+    fldIt.appendChild(itWrap);
+    grid.appendChild(fldIt);
+
+    card.appendChild(grid);
+
+    const statsTbl = h('<table class="calc-stats"><thead><tr><th>Estadística</th><th>Base</th><th>' + (gen <= 2 ? 'DVs' : 'IVs') + '</th><th>EVs</th><th>Final</th></tr></thead><tbody></tbody></table>');
+    const tbody = statsTbl.querySelector('tbody');
+    let pkmn = null;
+    try { if (s.name) pkmn = makePokemon(slot); } catch (e) { pkmn = null; }
+
+    if (!pkmn) {
+      tbody.innerHTML = '<tr><td colspan="5" class="calc-empty">' + (s.name ? 'Especie no encontrada en este generación' : 'Busca un Pokémon para empezar') + '</td></tr>';
+    } else {
+      for (const k of ST()) {
+        const base = pkmn.species.baseStats[statKey(k)];
+        const row = h('<tr><td class="st-lbl">' + STAT_ES[k] + '</td><td class="st-base">' + base + '</td><td><input type="number" min="0" max="' + (gen <= 2 ? 15 : 31) + '" value="' + s.ivs[k] + '"></td><td><input type="number" min="0" max="252" step="4" value="' + s.evs[k] + '"></td><td class="st-final"><b>' + pkmn.stats[k] + '</b></td></tr>');
+        const ins = row.querySelectorAll('input');
+        ins[0].addEventListener('input', e => { s.ivs[k] = Math.max(0, Math.min(gen <= 2 ? 15 : 31, parseInt(e.target.value, 10) || 0)); recompute() });
+        ins[1].addEventListener('input', e => { s.evs[k] = Math.max(0, Math.min(252, parseInt(e.target.value, 10) || 0)); recompute() });
+        tbody.appendChild(row);
+      }
+      const tot = evTotal(s);
+      const fRow = h('<tr class="calc-evrow"><td><b>Total EV</b></td><td></td><td></td><td class="ev-tot' + (tot > 510 ? ' over' : '') + '"><b>' + tot + '</b></td><td></td></tr>');
+      tbody.appendChild(fRow);
+
+      const hpPct = h('<div class="calc-hp"></div>');
+      const lvl = s.level;
+      const hpIn = numField('HP actual / ' + pkmn.stats.hp, s.curHP, 0, pkmn.stats.hp, 1, v => { s.curHP = Math.max(0, Math.min(pkmn.stats.hp, v)); recompute() });
+      hpIn.querySelector('input').value = s.curHP || '';
+      hpIn.querySelector('input').placeholder = pkmn.stats.hp + ' (máx)';
+      hpPct.appendChild(hpIn);
+      card.appendChild(hpPct);
+
+      const sprEl = card.querySelector('.spr-slot');
+      sprEl.innerHTML = spr(s.name, '', null, false);
+      card.querySelector('[data-role=sub]').textContent = '#' + (pkmn.species.num || '—') + ' · ' + pkmn.types.map(typeES).join(' / ');
+      card.querySelectorAll('.types-row');
+      const tyRow = h('<div class="calc-types">' + pkmn.types.map(t => typeChip(t)).join('') + (s.teraType ? typeChip(s.teraType) : '') + '</div>');
+      card.querySelector('.calc-head > div').appendChild(tyRow);
+    }
+    card.appendChild(statsTbl);
+
+    const stWrap = h('<div class="calc-status"></div>');
+    stWrap.appendChild(selectField('Estado', ['', 'Par', 'Psh', 'Tox', 'Brn', 'Frz', 'Slp'].map(v => ({ v, t: { '': 'Sano', 'Par': 'Paralítico', 'Psh': 'Envenenado', 'Tox': 'Tóxico', 'Brn': 'Quemado', 'Frz': 'Congelado', 'Slp': 'Dormido' }[v] })), s.status, v => { s.status = v; recompute() }));
+    if (s.status === 'Toxic') stWrap.appendChild(numField('Turnos de tóxico', s.toxicCounter, 1, 6, 1, v => { s.toxicCounter = Math.max(1, Math.min(6, v)); recompute() }));
+    stWrap.appendChild(selectField('Tera tipo (SV)', [''].concat(listTypes()), s.teraType, v => { s.teraType = v; recompute() }));
+    stWrap.appendChild(checkField('Dynamax (SS/SV)', s.dynamax, v => { s.dynamax = v; recompute() }));
+    card.appendChild(stWrap);
+
+    const mvWrap = h('<div class="calc-moves"><div class="calc-moves-title">Movimientos <span>(4 slots)</span></div></div>');
+    const mvKey = idx === 1 ? 'moves1' : 'moves2';
+    const exKey = idx === 1 ? 'ex1_' : 'ex2_';
+    const crKey = idx === 1 ? 'crit1_' : 'crit2_';
+    for (let mi = 0; mi < 4; mi++) {
+      const box = h('<div class="calc-mvrow"></div>');
+      const mc = comboEl('movimiento…', listMoves, v => { state[mvKey][mi] = v; recompute() }, state[mvKey][mi]);
+      box.appendChild(mc);
+      box.appendChild(checkField('Crít', !!state[crKey + mi], v => { state[crKey + mi] = v; recompute(); }));
+      box.appendChild(selectField('Extra', [{ v: '', t: '—' }, { v: 'z', t: 'Z' }, { v: 'max', t: 'Max' }, { v: 'crit', t: 'Crít' }, { v: 'stellar', t: 'Stellar' }], state[exKey + mi] || '', v => { state[exKey + mi] = v; recompute(); }));
+      mvWrap.appendChild(box);
+    }
+    card.appendChild(mvWrap);
+
+    return card;
+  }
+
+  function fieldHTML() {
+    return '<div class="calc-field"><h3>⚡ Campo de batalla</h3><div class="calc-field-cols"><div class="fcol">' +
+      '<div class="fgrp"><h4>Global</h4>' +
+      '<label class="lbl">Clima</label><select id="f-weather"><option value="">Ninguno</option><option value="Sun">Sol</option><option value="Rain">Lluvia</option><option value="Sand">Tormenta de arena</option><option value="Hail">Granizo</option><option value="Snow">Nieve</option><option value="Harsh Sunshine">Sol abrasador</option><option value="Heavy Rain">Lluvia intensa</option><option value="Strong Winds">Vientos fuertes</option></select>' +
+      '<label class="lbl">Terreno</label><select id="f-terrain"><option value="">Ninguno</option><option value="Electric">Eléctrico</option><option value="Grassy">Hierba</option><option value="Misty">Niebla</option><option value="Psychic">Psíquico</option></select>' +
+      '<label class="lbl">Formato</label><select id="f-gametype"><option value="Singles">Singles</option><option value="Doubles">Doubles</option></select>' +
+      '<div class="calc-chkrow"><label class="calc-chk"><input type="checkbox" id="f-magicroom"><span>Magic Room</span></label><label class="calc-chk"><input type="checkbox" id="f-wonderroom"><span>Wonder Room</span></label><label class="calc-chk"><input type="checkbox" id="f-gravity"><span>Gravity</span></label></div>' +
+      '<div class="calc-chkrow"><label class="calc-chk"><input type="checkbox" id="f-beads"><span>Beads of Ruin</span></label><label class="calc-chk"><input type="checkbox" id="f-sword"><span>Sword of Ruin</span></label><label class="calc-chk"><input type="checkbox" id="f-tablets"><span>Tablets of Ruin</span></label><label class="calc-chk"><input type="checkbox" id="f-vessel"><span>Vessel of Ruin</span></label></div>' +
+      '<div class="calc-chkrow"><label class="calc-chk"><input type="checkbox" id="f-aurabreak"><span>Aura Break</span></label><label class="calc-chk"><input type="checkbox" id="f-fairyaura"><span>Fairy Aura</span></label><label class="calc-chk"><input type="checkbox" id="f-darkaura"><span>Dark Aura</span></label></div>' +
+      '</div></div><div class="fcol"><div class="fgrp"><h4>Lado de Pokémon 1</h4>' +
+      '<div class="calc-chkrow"><label class="calc-chk"><input type="checkbox" id="f-sr1"><span>Stealth Rock</span></label><label class="calc-chk"><input type="checkbox" id="f-steel1"><span>Steelsurge</span></label></div>' +
+      '<label class="lbl">Spikes</label><select id="f-spikes1"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>' +
+      '<div class="calc-chkrow"><label class="calc-chk"><input type="checkbox" id="f-reflect1"><span>Reflect</span></label><label class="calc-chk"><input type="checkbox" id="f-screen1"><span>Light Screen</span></label><label class="calc-chk"><input type="checkbox" id="f-aurora1"><span>Aurora Veil</span></label></div>' +
+      '<div class="calc-chkrow"><label class="calc-chk"><input type="checkbox" id="f-protect1"><span>Protect</span></label><label class="calc-chk"><input type="checkbox" id="f-seed1"><span>Leech Seed</span></label><label class="calc-chk"><input type="checkbox" id="f-salt1"><span>Salt Cure</span></label></div>' +
+      '<div class="calc-chkrow"><label class="calc-chk"><input type="checkbox" id="f-foresight1"><span>Foresight</span></label><label class="calc-chk"><input type="checkbox" id="f-tailwind1"><span>Tailwind</span></label><label class="calc-chk"><input type="checkbox" id="f-help1"><span>Helping Hand</span></label></div>' +
+      '<div class="calc-chkrow"><label class="calc-chk"><input type="checkbox" id="f-charge1"><span>Charge</span></label><label class="calc-chk"><input type="checkbox" id="f-flower1"><span>Flower Gift</span></label><label class="calc-chk"><input type="checkbox" id="f-powertrick1"><span>Power Trick</span></label></div>' +
+      '<div class="calc-chkrow"><label class="calc-chk"><input type="checkbox" id="f-steely1"><span>Steely Spirit</span></label><label class="calc-chk"><input type="checkbox" id="f-battery1"><span>Battery</span></label><label class="calc-chk"><input type="checkbox" id="f-powerspot1"><span>Power Spot</span></label><label class="calc-chk"><input type="checkbox" id="f-switch1"><span>Cambiar de Pokémon</span></label></div>' +
+      '</div></div><div class="fcol"><div class="fgrp"><h4>Lado de Pokémon 2</h4>' +
+      '<div class="calc-chkrow"><label class="calc-chk"><input type="checkbox" id="f-sr2"><span>Stealth Rock</span></label><label class="calc-chk"><input type="checkbox" id="f-steel2"><span>Steelsurge</span></label></div>' +
+      '<label class="lbl">Spikes</label><select id="f-spikes2"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>' +
+      '<div class="calc-chkrow"><label class="calc-chk"><input type="checkbox" id="f-reflect2"><span>Reflect</span></label><label class="calc-chk"><input type="checkbox" id="f-screen2"><span>Light Screen</span></label><label class="calc-chk"><input type="checkbox" id="f-aurora2"><span>Aurora Veil</span></label></div>' +
+      '<div class="calc-chkrow"><label class="calc-chk"><input type="checkbox" id="f-protect2"><span>Protect</span></label><label class="calc-chk"><input type="checkbox" id="f-seed2"><span>Leech Seed</span></label><label class="calc-chk"><input type="checkbox" id="f-salt2"><span>Salt Cure</span></label></div>' +
+      '<div class="calc-chkrow"><label class="calc-chk"><input type="checkbox" id="f-foresight2"><span>Foresight</span></label><label class="calc-chk"><input type="checkbox" id="f-tailwind2"><span>Tailwind</span></label><label class="calc-chk"><input type="checkbox" id="f-help2"><span>Helping Hand</span></label></div>' +
+      '<div class="calc-chkrow"><label class="calc-chk"><input type="checkbox" id="f-charge2"><span>Charge</span></label><label class="calc-chk"><input type="checkbox" id="f-flower2"><span>Flower Gift</span></label><label class="calc-chk"><input type="checkbox" id="f-powertrick2"><span>Power Trick</span></label></div>' +
+      '<div class="calc-chkrow"><label class="calc-chk"><input type="checkbox" id="f-steely2"><span>Steely Spirit</span></label><label class="calc-chk"><input type="checkbox" id="f-battery2"><span>Battery</span></label><label class="calc-chk"><input type="checkbox" id="f-powerspot2"><span>Power Spot</span></label><label class="calc-chk"><input type="checkbox" id="f-switch2"><span>Cambiar de Pokémon</span></label></div>' +
+      '</div></div></div></div>';
+  }
+
+  function buildField() {
+    const f = state.field;
+    const side = n => ({
+      spikes: f['spikes' + n] | 0,
+      isSR: !!f['sr' + n],
+      steelsurge: !!f['steel' + n],
+      isReflect: !!f['reflect' + n],
+      isLightScreen: !!f['screen' + n],
+      isAuroraVeil: !!f['aurora' + n],
+      isProtected: !!f['protect' + n],
+      isSeeded: !!f['seed' + n],
+      isSaltCured: !!f['salt' + n],
+      isForesight: !!f['foresight' + n],
+      isTailwind: !!f['tailwind' + n],
+      isHelpingHand: !!f['help' + n],
+      isCharge: !!f['charge' + n],
+      isFlowerGift: !!f['flower' + n],
+      isPowerTrick: !!f['powertrick' + n],
+      isSteelySpirit: !!f['steely' + n],
+      isBattery: !!f['battery' + n],
+      isPowerSpot: !!f['powerspot' + n],
+      isSwitching: !!f['switch' + n]
+    });
+    return new Field({
+      gameType: f.gameType || 'Singles',
+      weather: f.weather || undefined,
+      terrain: f.terrain || undefined,
+      isMagicRoom: !!f.magicRoom,
+      isWonderRoom: !!f.wonderRoom,
+      isGravity: !!f.gravity,
+      isBeadsOfRuin: !!f.beads,
+      isSwordOfRuin: !!f.sword,
+      isTabletsOfRuin: !!f.tablets,
+      isVesselOfRuin: !!f.vessel,
+      isAuraBreak: !!f.aurabreak,
+      isFairyAura: !!f.fairyaura,
+      isDarkAura: !!f.darkaura,
+      attackerSide: side(1),
+      defenderSide: side(2)
+    });
+  }
+
+  function moveOptions(att, slot, mi) {
+    const mv = state[slot][mi];
+    if (!mv) return null;
+    const opts = { ability: att.ability, item: att.item };
+    if (state[(att === state.p1 ? 'ex1_' : 'ex2_') + mi] === 'z') opts.useZ = true;
+    if (state[(att === state.p1 ? 'ex1_' : 'ex2_') + mi] === 'max') opts.useMax = true;
+    if (state[(att === state.p1 ? 'ex1_' : 'ex2_') + mi] === 'stellar') opts.isStellarFirstUse = true;
+    const isCrit = !!state[(att === state.p1 ? 'crit1_' : 'crit2_') + mi] || state[(att === state.p1 ? 'ex1_' : 'ex2_') + mi] === 'crit';
+    if (isCrit) opts.isCrit = true;
+    return new Move(Generations.get(gen), mv, opts);
+  }
+
+  function resultLine(res, att, def, mv, attIdx, moveIdx) {
+    const [min, max] = res.range();
+    const hp = res.defender.stats.hp;
+    const desc = res.fullDesc(notation === '48' ? '48' : '%');
+    let ko;
+    try { ko = res.kochance().text; } catch (e) { ko = ''; }
+    const badge = effBadge(def, mv.type);
+    return '<div class="calc-rline" data-att="' + attIdx + '" data-mv="' + moveIdx + '"><div class="calc-rmain"><b>' + min + '-' + max + '</b> <span class="calc-pct">' + (Math.round(min / hp * 1000) / 10) + '%–' + (Math.round(max / hp * 1000) / 10) + '%</span> ' + badge + '</div><div class="calc-rdesc">' + esc(desc) + '</div>' + (ko ? '<div class="calc-rko">KO: ' + esc(ko) + '</div>' : '') + '</div>';
+  }
+
+  function renderResults() {
+    const box = root.querySelector('#calc-results');
+    if (!box) return;
+    if (!state.p1.name || !state.p2.name) {
+      box.innerHTML = '<div class="calc-res-empty">Elige los dos Pokémon para ver el daño.</div>';
+      return;
+    }
+    const m1 = state.moves1[state.sel1];
+    const m2 = state.moves2[state.sel2];
+    let html = '';
+    try {
+      const a = makePokemon('p1', m1 || undefined);
+      const b = makePokemon('p2', m2 || undefined);
+      const field = buildField();
+      const mkMove = (name, slot, mi) => {
+        const atk = slot === 'p1' ? a : b;
+        const opts = { ability: atk.ability, item: atk.item };
+        const ex = state[(slot === 'p1' ? 'ex1_' : 'ex2_') + mi];
+        if (ex === 'z') opts.useZ = true;
+        if (ex === 'max') opts.useMax = true;
+        if (ex === 'stellar') opts.isStellarFirstUse = true;
+        const crit = state[(slot === 'p1' ? 'crit1_' : 'crit2_') + mi];
+        if (crit || ex === 'crit') opts.isCrit = true;
+        return new Move(Generations.get(gen), name, opts);
+      };
+      if (m1) {
+        const mv = mkMove(m1, 'p1', state.sel1);
+        const res = calculate(gen, a, b, mv, field);
+        html += '<div class="calc-res-group"><div class="calc-res-title">' + esc(a.name || '') + ' <span class="calc-ar">→</span> ' + esc(b.name || '') + ' · ' + esc(mv.name) + '</div>';
+        html += resultLine(res, a, b, mv, 1, state.sel1);
+        html += '</div>';
+      } else if (state.moves1.filter(Boolean).length) {
+        html += '<div class="calc-res-group"><div class="calc-res-title">' + esc(a.name || '') + ' <span class="calc-ar">→</span> ' + esc(b.name || '') + '</div><div class="calc-res-empty">Selecciona un movimiento arriba.</div></div>';
+      }
+      if (m2) {
+        const mv2 = mkMove(m2, 'p2', state.sel2);
+        const res2 = calculate(gen, b, a, mv2, field);
+        html += '<div class="calc-res-group"><div class="calc-res-title">' + esc(b.name || '') + ' <span class="calc-ar">→</span> ' + esc(a.name || '') + ' · ' + esc(mv2.name) + '</div>';
+        html += resultLine(res2, b, a, mv2, 2, state.sel2);
+        html += '</div>';
+      }
+    } catch (e) {
+      html = '<div class="calc-res-empty">⚠️ ' + esc(String(e && e.message || e)) + '</div>';
+    }
+    box.innerHTML = html || '<div class="calc-res-empty">Elige un movimiento en cada panel para ver el resultado.</div>';
+
+    box.querySelectorAll('.calc-rline').forEach(r => {
+      r.onclick = () => {
+        const t = r.textContent;
+        if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => toast('Copiado', 'ok'));
+      };
+    });
+
+    const all = root.querySelector('#calc-all');
+    if (all && all.checked) renderAllMoves(box);
+  }
+
+  function renderAllMoves(box) {
+    try {
+      const a = makePokemon('p1');
+      const b = makePokemon('p2');
+      const field = buildField();
+      const renderSide = (att, def, attMoves, attKey) => {
+        let html = '';
+        let i = 0;
+        for (const raw of state[attKey]) {
+          if (!raw) { i++; continue; }
+          try {
+            const mv = new Move(Generations.get(gen), raw, { ability: att.ability, item: att.item, isCrit: !!state[(attKey === 'moves1' ? 'crit1_' : 'crit2_') + i] });
+            const res = calculate(gen, att, def, mv, field);
+            html += '<button class="calc-mvchip" data-side="' + attKey + '" data-mv="' + i + '">' + esc(mv.name) + ' <b>' + (Math.round(res.range()[0] / def.stats.hp * 1000) / 10) + '%' + (res.range()[0] !== res.range()[1] ? '–' + (Math.round(res.range()[1] / def.stats.hp * 1000) / 10) + '%' : '') + '</b></button>';
+          } catch (e) {}
+          i++;
+        }
+        return html;
+      };
+      box.insertAdjacentHTML('beforeend', '<div class="calc-allbox"><div class="calc-all-title">' + esc(a.name || '') + ' vs ' + esc(b.name || '') + '</div>' + renderSide(a, b, state.moves1, 'moves1') + '</div><div class="calc-allbox"><div class="calc-all-title">' + esc(b.name || '') + ' vs ' + esc(a.name || '') + '</div>' + renderSide(b, a, state.moves2, 'moves2') + '</div>');
+      box.querySelectorAll('.calc-mvchip').forEach(ch => {
+        ch.onclick = () => {
+          const mvIdx = +ch.dataset.mv;
+          if (ch.dataset.side === 'moves1') state.sel1 = mvIdx; else state.sel2 = mvIdx;
+          render();
+        };
+      });
+    } catch (e) {}
+  }
+
+  let root;
+  function render() {
+    root.innerHTML = '';
+
+    const top = h('<div class="calc-top"><div class="calc-title-block"><h2 class="section-title">Calculadora de daño</h2><p>Mismo motor que <b>calc.pokemonshowdown.com</b> (@smogon/calc): generaciones 1–9, EVs/IVs, climas, terrenos, campos laterales y tabla de tipos.</p></div>' +
+      '<div class="calc-controls"><div class="seg" id="calc-gen">' + GENS.map(g => '<button data-g="' + g.num + '" class="' + (gen === g.num ? 'on' : '') + '" title="' + g.label + '">' + g.label + '</button>').join('') + '</div>' +
+      '<div class="seg" id="calc-not">' + [{ v: '100', t: '%' }, { v: '48', t: '48/48' }].map(o => '<button data-n="' + o.v + '" class="' + (notation === o.v ? 'on' : '') + '">' + o.t + '</button>').join('') + '</div>' +
+      '<button class="btn btn-sm" id="calc-swap">⇄ Intercambiar</button></div></div>');
+
+    top.querySelector('#calc-gen').addEventListener('click', e => {
+      const b = e.target.closest('button[data-g]');
+      if (!b) return;
+      gen = +b.dataset.g;
+      const st = ST();
+      [state.p1, state.p2].forEach(s => {
+        const oIV = Object.assign({ hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31 }, s.ivs);
+        s.ivs = {};
+        for (const k of st) s.ivs[k] = oIV[k] == null ? 31 : oIV[k];
+      });
+      render();
+    });
+    top.querySelector('#calc-not').addEventListener('click', e => {
+      const b = e.target.closest('button[data-n]');
+      if (!b) return;
+      notation = b.dataset.n;
+      render();
+    });
+    top.querySelector('#calc-swap').onclick = () => { swap(); render(); };
+
+    root.appendChild(top);
+
+    const mons = h('<div class="calc-mons"></div>');
+    mons.appendChild(renderMonPanel(1));
+    const mid = h('<div class="calc-mid"><button class="btn btn-gold" id="swap2">⇄</button><div class="calc-vs">VS</div><div class="calc-mid-ctl"><div class="field"><label style="color:var(--muted);font-size:12px">Movimiento P1</label><select id="sel-m1"></select></div><div class="field"><label style="color:var(--muted);font-size:12px">Movimiento P2</label><select id="sel-m2"></select></div></div></div>');
+    mons.appendChild(mid);
+    mons.appendChild(renderMonPanel(2));
+    root.appendChild(mons);
+
+    const s1 = mons.querySelector('#sel-m1');
+    const s2 = mons.querySelector('#sel-m2');
+    s1.innerHTML = state.moves1.map((m, i) => m ? '<option value="' + i + '"' + (i === state.sel1 ? ' selected' : '') + '>' + esc(m) + '</option>' : '').join('');
+    s2.innerHTML = state.moves2.map((m, i) => m ? '<option value="' + i + '"' + (i === state.sel2 ? ' selected' : '') + '>' + esc(m) + '</option>' : '').join('');
+    s1.onchange = () => { state.sel1 = +s1.value; recompute(); };
+    s2.onchange = () => { state.sel2 = +s2.value; recompute(); };
+    if (!state.moves1.filter(Boolean)[state.sel1]) state.sel1 = state.moves1.findIndex(Boolean) >= 0 ? state.moves1.findIndex(Boolean) : 0;
+
+    root.appendChild(h(fieldHTML()));
+    const fw = root.querySelector('#f-weather');
+    const ft = root.querySelector('#f-terrain');
+    const fg = root.querySelector('#f-gametype');
+    const bindChk = (id, key) => {
+      const el = root.querySelector('#' + id);
+      if (!el) return;
+      const f = state.field;
+      if (f[key] != null) el.checked = !!f[key];
+      el.onchange = () => { f[key] = el.checked; recompute(); };
+    };
+    const bindNum = (id, key) => {
+      const el = root.querySelector('#' + id);
+      if (!el) return;
+      const f = state.field;
+      if (f[key] != null) el.value = String(f[key]);
+      el.onchange = () => { f[key] = +el.value; recompute(); };
+    };
+    if (state.field.weather) fw.value = state.field.weather;
+    if (state.field.terrain) ft.value = state.field.terrain;
+    if (state.field.gameType) fg.value = state.field.gameType;
+    fw.onchange = () => { state.field.weather = fw.value; recompute(); };
+    ft.onchange = () => { state.field.terrain = ft.value; recompute(); };
+    fg.onchange = () => { state.field.gameType = fg.value; recompute(); };
+    ['magicroom', 'wonderroom', 'gravity', 'beads', 'sword', 'tablets', 'vessel', 'aurabreak', 'fairyaura', 'darkaura'].forEach(k => bindChk('f-' + k, k));
+    for (let n = 1; n <= 2; n++) {
+      ['sr', 'steel', 'reflect', 'screen', 'aurora', 'protect', 'seed', 'salt', 'foresight', 'tailwind', 'help', 'charge', 'flower', 'powertrick', 'steely', 'battery', 'powerspot', 'switch'].forEach(k => bindChk('f-' + k + n, k + n));
+      bindNum('f-spikes' + n, 'spikes' + n);
+    }
+
+    const res = h('<div class="calc-results" id="calc-results"><div class="calc-res-empty">Elige los dos Pokémon para ver el daño.</div></div>');
+    const resTop = h('<div class="calc-res-top"><h3>📊 Resultados</h3><label class="calc-chk"><input type="checkbox" id="calc-all"><span>Ver todas las combos (matriz)</span></label><button class="btn btn-sm" id="res-copy">📋 Copiar resultado</button></div>');
+    root.appendChild(resTop);
+    root.appendChild(res);
+    resTop.querySelector('#calc-all').onchange = e => { if (e.target.checked) { renderResults(); } else render(); };
+    resTop.querySelector('#res-copy').onclick = () => {
+      const t = res.innerText.replace(/\n{2,}/g, '\n').trim();
+      if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => toast('Resultado copiado', 'ok'));
+    };
+
+    root.appendChild(h('<div class="calc-chart-wrap"><h3>🧪 Tabla de tipos · ' + GEN_NAMES[gen] + '</h3><div class="chart-scroll"></div></div>'));
+    root.querySelector('.chart-scroll').innerHTML = typeChartTable();
+
+    renderResults();
+  }
+
+  function recompute() {
+    renderResults();
+    const box = root.querySelector('#calc-results');
+    if (box && root.querySelector('#calc-all') && root.querySelector('#calc-all').checked) renderAllMoves(box);
+  }
+
+  root = h('<div class="calc-wrap"></div>');
+  app.appendChild(root);
+  render();
+}
+
 
 async function viewDex() {
   const app = document.getElementById('app');
