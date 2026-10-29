@@ -1,5 +1,5 @@
 /* ================= DATOS ================= */
-const TYPES = ['normal','fire','water','electric','grass','ice','fighting','poison','ground','flying','psychic','bug','rock','ghost','dragon','dark','steel','fairy'];
+const TYPES = ['normal','fire','water','electric','grass','ice','fighting','poison','ground','flying','psychic','bug','rock','ghost','dragon','dark','steel','fairy','stellar'];
 const TYPE_COLOR = {
   normal:'#9fa19f',
   fire:'#e62829',
@@ -38,7 +38,8 @@ const TYPE_EN = {
   dragon:'Dragón',
   dark:'Siniestro',
   steel:'Acero',
-  fairy:'Hada'
+  fairy:'Hada',
+  stellar:'Astral'
 };
 const DEF = {
   normal:{rock:.5,ghost:0,steel:.5},
@@ -50,15 +51,16 @@ const DEF = {
   fighting:{normal:2,ice:2,poison:.5,flying:.5,psychic:.5,bug:.5,rock:2,ghost:0,dark:2,steel:2,fairy:.5},
   poison:{grass:2,poison:.5,ground:.5,rock:.5,ghost:.5,steel:0,fairy:2},
   ground:{fire:2,electric:2,grass:.5,poison:2,flying:0,bug:.5,rock:2,steel:2},
-  flying:{electric:.5,grass:2,fighting:2,bug:2,rock:.5},
+  flying:{electric:.5,grass:2,fighting:2,bug:2,rock:.5,steel:.5},
   psychic:{fighting:2,poison:2,psychic:.5,steel:.5,dark:0},
   bug:{fire:.5,grass:2,fighting:.5,poison:.5,flying:.5,psychic:2,ghost:.5,dark:2,steel:.5,fairy:.5},
   rock:{fire:2,ice:2,fighting:.5,ground:.5,flying:2,bug:2,steel:.5},
   ghost:{normal:0,psychic:2,ghost:2,dark:.5},
-  dragon:{dragon:2,steel:.5,fairy:.5},
+  dragon:{dragon:2,steel:.5,fairy:0},
   dark:{psychic:2,ghost:2,fighting:.5,dark:.5,fairy:.5},
   steel:{fire:.5,water:.5,electric:.5,ice:2,rock:2,steel:.5,fairy:2},
-  fairy:{fire:.5,fighting:2,poison:.5,dragon:2,dark:2,steel:.5}
+  fairy:{fire:.5,fighting:2,poison:.5,dragon:2,dark:2,steel:.5},
+  stellar:{}
 };
 const STATS = ['hp','atk','def','spa','spd','spe'];
 const STAT_ES = { hp:'PS', atk:'Atq', def:'Def', spa:'At.E', spd:'Def.E', spe:'Vd' };
@@ -142,7 +144,7 @@ function pokeSlug(n, f) {
 }
 
 function typeColor(t) { return TYPE_COLOR[t] || '#61738f' }
-function typeES(t) { return TYPE_EN[t] || t }
+function typeES(t) { return TYPE_EN[t] || TYPE_EN[String(t).toLowerCase()] || t }
 
 function eff(a, d) {
   let m = 1;
@@ -1008,6 +1010,7 @@ let room = null;
 let pollTimer = null;
 let lastRenderedStatus = null;
 let openSlotOnRender = null;
+let calcSubtab = 'calc';
 
 const routes = {
   inicio:viewHome,
@@ -1026,6 +1029,7 @@ function nav() {
   const hash = (location.hash || '#/inicio').replace('#/', '');
   const [name, ...rest] = hash.split('/');
   document.querySelectorAll('.mainnav a').forEach(a => a.classList.toggle('on', a.dataset.nav === name));
+  if (name === 'calculadora') calcSubtab = rest[0] === 'tipos' ? 'tipos' : 'calc';
   document.getElementById('app').innerHTML = '';
   const fn = routes[name] || viewHome;
   fn(rest);
@@ -1990,10 +1994,10 @@ function viewCalculadora() {
     const l = ('' + n).toLowerCase();
     return l === 'flabébé' ? 'flabebe' : l.replace(/[^a-z0-9]+/g, '');
   };
-  const cap = w => w.charAt(0).toUpperCase() + w.slice(1);
+  const capW = w => w.charAt(0).toUpperCase() + w.slice(1);
   const pretty = id => id.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-  const capWords = s => String(s).split('-').map(cap).join(' ');
-  const titleCase = s => String(s).split(/[-\s]+/).map(cap).join(' ');
+  const capWords = s => String(s).split('-').map(capW).join(' ');
+  const titleCase = s => String(s).split(/[-\s]+/).map(capW).join(' ');
 
   const listSpecies = () => { const a = []; for (const s of Generations.get(gen).species) a.push(s.name); return a; };
   const listMoves = () => { const a = []; for (const m of Generations.get(gen).moves) a.push(m.name); return a; };
@@ -2001,16 +2005,17 @@ function viewCalculadora() {
   const listAbilities = () => { const a = []; for (const ab of Generations.get(gen).abilities) a.push(ab.name); return a; };
   const listTypes = () => { const a = []; for (const t of Generations.get(gen).types) if (t.name !== '???') a.push(t.name); return a; };
 
-  const effVs = (types, t) => types.reduce((m, d) => Math.min(m, t.effectiveness[d] == null ? 1 : t.effectiveness[d]), 99);
+  const effTable = t => (t && t.effectiveness) ? t.effectiveness : t;
+  const effVs = (types, t) => { const e = effTable(t); return types.reduce((m, d) => { const v = e[d]; return Math.min(m, v == null ? 1 : v); }, 99); };
   const typeChartTable = () => {
     const chart = C.TYPE_CHART[gen] || C.TYPE_CHART[9];
-    const ts = listTypes();
+    const ts = listTypes().filter(t => t !== '???');
     const cell = v => v === 0 ? '<span class="cm-x">0×</span>' : v === 0.5 ? '<span class="cm-h">½×</span>' : v === 2 ? '<span class="cm-s">2×</span>' : v === 4 ? '<span class="cm-s">4×</span>' : '<span class="cm-n">1×</span>';
     return '<table class="chart"><thead><tr><th>Atq ↓ / Def →</th>' + ts.map(d => '<th class="tt-' + d.toLowerCase() + '">' + typeES(d) + '</th>').join('') + '</tr></thead><tbody>' +
       ts.map(atk => {
-        const tdef = chart[atk];
+        const tdef = chart ? chart[capW(atk)] : null;
         return '<tr><td class="chart-atk tt-' + atk.toLowerCase() + '">' + typeES(atk) + '</td>' + ts.map(d => {
-          const v = tdef ? effVs([d], tdef) : 1;
+          const v = tdef ? effVs([capW(d)], tdef) : 1;
           return '<td class="chart-cell">' + cell(v) + '</td>';
         }).join('') + '</tr>';
       }).join('') + '</tbody></table>';
@@ -2019,9 +2024,9 @@ function viewCalculadora() {
   const effBadge = (pkmn, moveType) => {
     if (!pkmn || !moveType || !pkmn.types) return '';
     const chart = C.TYPE_CHART[gen] || C.TYPE_CHART[9];
-    const at = chart[moveType];
+    const at = chart ? chart[capW(moveType)] : null;
     if (!at) return '';
-    const m = effVs(pkmn.types, at);
+    const m = effVs(pkmn.types.map(capW), at);
     const txt = m === 0 ? 'inmune' : m === 0.25 ? '¼×' : m === 0.5 ? '½×' : m === 1 ? '1×' : m === 2 ? '2×' : m === 4 ? '4×' : String(m);
     const cls = m === 0 ? 'immune' : m < 1 ? 'res' : m > 1 ? 'super' : 'nor';
     return '<span class="calc-eff-badge ' + cls + '">' + txt + '</span>';
@@ -2404,10 +2409,40 @@ function viewCalculadora() {
   }
 
   let root;
+
+  function renderTabs() {
+    const tabs = h('<div class="calc-tabs"><button data-tab="calc" class="' + (calcSubtab === 'calc' ? 'on' : '') + '">🧮 Calculadora</button><button data-tab="tipos" class="' + (calcSubtab === 'tipos' ? 'on' : '') + '">🧪 Tabla de tipos</button></div>');
+    tabs.addEventListener('click', e => {
+      const b = e.target.closest('button[data-tab]');
+      if (!b) return;
+      location.hash = b.dataset.tab === 'tipos' ? '#/calculadora/tipos' : '#/calculadora';
+    });
+    return tabs;
+  }
+
+  function renderChartPage() {
+    const wrap = h('<div class="calc-chart-page"><div class="calc-chart-head"><h3 class="section-title">🧪 Tabla de tipos · ' + GEN_NAMES[gen] + '</h3><p style="color:var(--muted)">Efectividad de cada tipo atacante (filas) contra cada tipo defensor (columnas). El daño real contra un Pokémon de dos tipos es el producto de ambos.</p></div>' +
+      '<div class="seg" id="chart-gen">' + GENS.map(g => '<button data-g="' + g.num + '" class="' + (gen === g.num ? 'on' : '') + '" title="' + g.label + '">' + g.label + '</button>').join('') + '</div>' +
+      '<div class="chart-scroll"></div></div>');
+    wrap.querySelector('#chart-gen').addEventListener('click', e => {
+      const b = e.target.closest('button[data-g]');
+      if (!b) return;
+      gen = +b.dataset.g;
+      render();
+    });
+    wrap.querySelector('.chart-scroll').innerHTML = typeChartTable();
+    return wrap;
+  }
+
   function render() {
     root.innerHTML = '';
+    root.appendChild(renderTabs());
+    if (calcSubtab === 'tipos') {
+      root.appendChild(renderChartPage());
+      return;
+    }
 
-    const top = h('<div class="calc-top"><div class="calc-title-block"><h2 class="section-title">Calculadora de daño</h2><p>Mismo motor que <b>calc.pokemonshowdown.com</b> (@smogon/calc): generaciones 1–9, EVs/IVs, climas, terrenos, campos laterales y tabla de tipos.</p></div>' +
+    const top = h('<div class="calc-top"><div class="calc-title-block"><h2 class="section-title">Calculadora de daño</h2><p>Mismo motor que <b>calc.pokemonshowdown.com</b> (@smogon/calc): generaciones 1–9, EVs/IVs, climas, terrenos y campos laterales.</p></div>' +
       '<div class="calc-controls"><div class="seg" id="calc-gen">' + GENS.map(g => '<button data-g="' + g.num + '" class="' + (gen === g.num ? 'on' : '') + '" title="' + g.label + '">' + g.label + '</button>').join('') + '</div>' +
       '<div class="seg" id="calc-not">' + [{ v: '100', t: '%' }, { v: '48', t: '48/48' }].map(o => '<button data-n="' + o.v + '" class="' + (notation === o.v ? 'on' : '') + '">' + o.t + '</button>').join('') + '</div>' +
       '<button class="btn btn-sm" id="calc-swap">⇄ Intercambiar</button></div></div>');
@@ -2449,6 +2484,16 @@ function viewCalculadora() {
     s2.onchange = () => { state.sel2 = +s2.value; recompute(); };
     if (!state.moves1.filter(Boolean)[state.sel1]) state.sel1 = state.moves1.findIndex(Boolean) >= 0 ? state.moves1.findIndex(Boolean) : 0;
 
+    const res = h('<div class="calc-results" id="calc-results"><div class="calc-res-empty">Elige los dos Pokémon para ver el daño.</div></div>');
+    const resTop = h('<div class="calc-res-top"><h3>📊 Resultados</h3><label class="calc-chk"><input type="checkbox" id="calc-all"><span>Ver todas las combos (matriz)</span></label><button class="btn btn-sm" id="res-copy">📋 Copiar resultado</button></div>');
+    root.appendChild(resTop);
+    root.appendChild(res);
+    resTop.querySelector('#calc-all').onchange = e => { if (e.target.checked) { renderResults(); } else render(); };
+    resTop.querySelector('#res-copy').onclick = () => {
+      const t = res.innerText.replace(/\n{2,}/g, '\n').trim();
+      if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => toast('Resultado copiado', 'ok'));
+    };
+
     root.appendChild(h(fieldHTML()));
     const fw = root.querySelector('#f-weather');
     const ft = root.querySelector('#f-terrain');
@@ -2478,19 +2523,6 @@ function viewCalculadora() {
       ['sr', 'steel', 'reflect', 'screen', 'aurora', 'protect', 'seed', 'salt', 'foresight', 'tailwind', 'help', 'charge', 'flower', 'powertrick', 'steely', 'battery', 'powerspot', 'switch'].forEach(k => bindChk('f-' + k + n, k + n));
       bindNum('f-spikes' + n, 'spikes' + n);
     }
-
-    const res = h('<div class="calc-results" id="calc-results"><div class="calc-res-empty">Elige los dos Pokémon para ver el daño.</div></div>');
-    const resTop = h('<div class="calc-res-top"><h3>📊 Resultados</h3><label class="calc-chk"><input type="checkbox" id="calc-all"><span>Ver todas las combos (matriz)</span></label><button class="btn btn-sm" id="res-copy">📋 Copiar resultado</button></div>');
-    root.appendChild(resTop);
-    root.appendChild(res);
-    resTop.querySelector('#calc-all').onchange = e => { if (e.target.checked) { renderResults(); } else render(); };
-    resTop.querySelector('#res-copy').onclick = () => {
-      const t = res.innerText.replace(/\n{2,}/g, '\n').trim();
-      if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => toast('Resultado copiado', 'ok'));
-    };
-
-    root.appendChild(h('<div class="calc-chart-wrap"><h3>🧪 Tabla de tipos · ' + GEN_NAMES[gen] + '</h3><div class="chart-scroll"></div></div>'));
-    root.querySelector('.chart-scroll').innerHTML = typeChartTable();
 
     renderResults();
   }
