@@ -1010,13 +1010,13 @@ let room = null;
 let pollTimer = null;
 let lastRenderedStatus = null;
 let openSlotOnRender = null;
-let calcSubtab = 'calc';
 
 const routes = {
   inicio:viewHome,
   constructor:viewBuilder,
   equipos:cpRenderTeams,
   calculadora:viewCalculadora,
+  tipos:viewTypeChart,
   unirse:viewJoin,
   dex:viewDex,
   ajustes:viewSettings,
@@ -1028,8 +1028,8 @@ const routes = {
 function nav() {
   const hash = (location.hash || '#/inicio').replace('#/', '');
   const [name, ...rest] = hash.split('/');
+  if (name === 'calculadora' && rest[0] === 'tipos') { location.hash = '#/tipos'; return; }
   document.querySelectorAll('.mainnav a').forEach(a => a.classList.toggle('on', a.dataset.nav === name));
-  if (name === 'calculadora') calcSubtab = rest[0] === 'tipos' ? 'tipos' : 'calc';
   document.getElementById('app').innerHTML = '';
   const fn = routes[name] || viewHome;
   fn(rest);
@@ -2410,37 +2410,8 @@ function viewCalculadora() {
 
   let root;
 
-  function renderTabs() {
-    const tabs = h('<div class="calc-tabs"><button data-tab="calc" class="' + (calcSubtab === 'calc' ? 'on' : '') + '">🧮 Calculadora</button><button data-tab="tipos" class="' + (calcSubtab === 'tipos' ? 'on' : '') + '">🧪 Tabla de tipos</button></div>');
-    tabs.addEventListener('click', e => {
-      const b = e.target.closest('button[data-tab]');
-      if (!b) return;
-      location.hash = b.dataset.tab === 'tipos' ? '#/calculadora/tipos' : '#/calculadora';
-    });
-    return tabs;
-  }
-
-  function renderChartPage() {
-    const wrap = h('<div class="calc-chart-page"><div class="calc-chart-head"><h3 class="section-title">🧪 Tabla de tipos · ' + GEN_NAMES[gen] + '</h3><p style="color:var(--muted)">Efectividad de cada tipo atacante (filas) contra cada tipo defensor (columnas). El daño real contra un Pokémon de dos tipos es el producto de ambos.</p></div>' +
-      '<div class="seg" id="chart-gen">' + GENS.map(g => '<button data-g="' + g.num + '" class="' + (gen === g.num ? 'on' : '') + '" title="' + g.label + '">' + g.label + '</button>').join('') + '</div>' +
-      '<div class="chart-scroll"></div></div>');
-    wrap.querySelector('#chart-gen').addEventListener('click', e => {
-      const b = e.target.closest('button[data-g]');
-      if (!b) return;
-      gen = +b.dataset.g;
-      render();
-    });
-    wrap.querySelector('.chart-scroll').innerHTML = typeChartTable();
-    return wrap;
-  }
-
   function render() {
     root.innerHTML = '';
-    root.appendChild(renderTabs());
-    if (calcSubtab === 'tipos') {
-      root.appendChild(renderChartPage());
-      return;
-    }
 
     const top = h('<div class="calc-top"><div class="calc-title-block"><h2 class="section-title">Calculadora de daño</h2><p>Mismo motor que <b>calc.pokemonshowdown.com</b> (@smogon/calc): generaciones 1–9, EVs/IVs, climas, terrenos y campos laterales.</p></div>' +
       '<div class="calc-controls"><div class="seg" id="calc-gen">' + GENS.map(g => '<button data-g="' + g.num + '" class="' + (gen === g.num ? 'on' : '') + '" title="' + g.label + '">' + g.label + '</button>').join('') + '</div>' +
@@ -2535,6 +2506,66 @@ function viewCalculadora() {
 
   root = h('<div class="calc-wrap"></div>');
   app.appendChild(root);
+  render();
+}
+
+function viewTypeChart() {
+  const app = document.getElementById('app');
+  app.innerHTML = '';
+
+  const C = window.PokemonCalc;
+  if (!C) {
+    app.appendChild(h('<div class="calc-wrap"><div class="card"><h3>⚙️ Cargando datos…</h3><p style="color:var(--muted)">El bundle <code>js/pokemon-calc.bundle.js</code> no se ha podido cargar.</p></div></div>'));
+    return;
+  }
+
+  const GENS = [
+    { num: 1, label: 'RBY' },
+    { num: 2, label: 'GSC' },
+    { num: 3, label: 'ADV' },
+    { num: 4, label: 'DPP' },
+    { num: 5, label: 'BW' },
+    { num: 6, label: 'XY' },
+    { num: 7, label: 'SM' },
+    { num: 8, label: 'SS' },
+    { num: 9, label: 'SV' }
+  ];
+  const GEN_NAMES = ['', 'RBY', 'GSC', 'ADV', 'DPP', 'BW', 'XY', 'SM', 'SS', 'SV'];
+  let gen = 9;
+
+  const typeChartTable = () => {
+    const chart = C.TYPE_CHART[gen] || C.TYPE_CHART[9];
+    const ts = C.TYPES || TYPES;
+    const capW = s => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+    const cell = v => '<span class="cm ' + (v === 0 ? 'x0' : v === 0.5 ? 'x2' : v === 2 ? 'xh' : 'x1') + '">' + (v === 0 ? '0×' : v === 0.5 ? '½×' : v === 2 ? '2×' : '1×') + '</span>';
+    return '<table class="chart"><thead><tr><th>Atq ↓ / Def →</th>' + ts.map(d => '<th class="tt-' + d.toLowerCase() + '">' + typeES(d) + '</th>').join('') + '</tr></thead><tbody>' +
+      ts.map(atk => {
+        const tdef = chart ? chart[capW(atk)] : null;
+        return '<tr><td class="chart-atk tt-' + atk.toLowerCase() + '">' + typeES(atk) + '</td>' + ts.map(d => {
+          const v = tdef && tdef[capW(d)] != null ? tdef[capW(d)] : 1;
+          return '<td class="chart-cell">' + cell(v) + '</td>';
+        }).join('') + '</tr>';
+      }).join('') + '</tbody></table>';
+  };
+
+  const wrap = h('<div class="calc-wrap"><div class="calc-chart-page"><div class="calc-chart-head"><h2 class="section-title">🧪 Tabla de tipos · ' + GEN_NAMES[gen] + '</h2><p style="color:var(--muted)">Efectividad de cada tipo atacante (filas) contra cada tipo defensor (columnas). El daño real contra un Pokémon de dos tipos es el producto de ambos.</p></div>' +
+    '<div class="seg" id="chart-gen">' + GENS.map(g => '<button data-g="' + g.num + '" class="' + (gen === g.num ? 'on' : '') + '" title="' + g.label + '">' + g.label + '</button>').join('') + '</div>' +
+    '<div class="chart-scroll"></div></div></div>');
+
+  const render = () => {
+    wrap.querySelector('#chart-gen').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.g === gen));
+    wrap.querySelector('.calc-chart-head h2').textContent = '🧪 Tabla de tipos · ' + GEN_NAMES[gen];
+    wrap.querySelector('.chart-scroll').innerHTML = typeChartTable();
+  };
+
+  wrap.querySelector('#chart-gen').addEventListener('click', e => {
+    const b = e.target.closest('button[data-g]');
+    if (!b) return;
+    gen = +b.dataset.g;
+    render();
+  });
+
+  app.appendChild(wrap);
   render();
 }
 
