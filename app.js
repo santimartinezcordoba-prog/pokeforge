@@ -2535,27 +2535,73 @@ function viewTypeChart() {
 
   const typeChartTable = () => {
     const chart = C.TYPE_CHART[gen] || C.TYPE_CHART[9];
-    const ts = C.TYPES || TYPES;
+    const ts = (C.TYPES && C.TYPES.length ? C.TYPES : TYPES.slice());
+    if (ts.indexOf('stellar') < 0 && TYPE_EN.stellar) ts.push('stellar');
     const capW = s => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
-    const cell = v => '<span class="cm ' + (v === 0 ? 'x0' : v === 0.5 ? 'x2' : v === 2 ? 'xh' : 'x1') + '">' + (v === 0 ? '0×' : v === 0.5 ? '½×' : v === 2 ? '2×' : '1×') + '</span>';
-    return '<table class="chart"><thead><tr><th>Atq ↓ / Def →</th>' + ts.map(d => '<th class="tt-' + d.toLowerCase() + '">' + typeES(d) + '</th>').join('') + '</tr></thead><tbody>' +
+    const cell = v => '<span class="cm ' + (v === 0 ? 'cm-0' : v === 0.5 ? 'cm-half' : v === 2 ? 'cm-2' : 'cm-1') + '">' + (v === 0 ? '0×' : v === 0.5 ? '½×' : v === 2 ? '2×' : '1×') + '</span>';
+    return '<div class="typechart-scalebox"><table class="chart typechart-table"><thead><tr><th>Atq ↓ / Def →</th>' + ts.map(d => '<th class="tt-' + d.toLowerCase() + '">' + typeES(d) + '</th>').join('') + '</tr></thead><tbody>' +
       ts.map(atk => {
         const tdef = chart ? chart[capW(atk)] : null;
         return '<tr><td class="chart-atk tt-' + atk.toLowerCase() + '">' + typeES(atk) + '</td>' + ts.map(d => {
           const v = tdef && tdef[capW(d)] != null ? tdef[capW(d)] : 1;
           return '<td class="chart-cell">' + cell(v) + '</td>';
         }).join('') + '</tr>';
-      }).join('') + '</tbody></table>';
+      }).join('') + '</tbody></table></div>';
   };
 
   const wrap = h('<div class="calc-wrap"><div class="calc-chart-page"><div class="calc-chart-head"><h2 class="section-title">🧪 Tabla de tipos · ' + GEN_NAMES[gen] + '</h2><p style="color:var(--muted)">Efectividad de cada tipo atacante (filas) contra cada tipo defensor (columnas). El daño real contra un Pokémon de dos tipos es el producto de ambos.</p></div>' +
     '<div class="seg" id="chart-gen">' + GENS.map(g => '<button data-g="' + g.num + '" class="' + (gen === g.num ? 'on' : '') + '" title="' + g.label + '">' + g.label + '</button>').join('') + '</div>' +
-    '<div class="chart-scroll"></div></div></div>');
+    '<div class="chart-stage"></div></div></div>');
+
+  const prevPad = app.style.paddingBottom;
+  const footer = document.querySelector('.footer');
+  const prevFooter = footer ? footer.style.display : '';
+  if (footer) footer.style.display = 'none';
+  let fitGen = 0;
+  function fit() {
+    const page = wrap.querySelector('.calc-chart-page');
+    const stage = wrap.querySelector('.chart-stage');
+    const box = stage && stage.querySelector('.typechart-scalebox');
+    const tbl = stage && stage.querySelector('.typechart-table');
+    if (!page || !stage || !box || !tbl) return;
+    tbl.style.transform = '';
+    box.style.width = '';
+    box.style.height = '';
+    const top = page.getBoundingClientRect().top + scrollY;
+    const gap = 20;
+    const wrapPadB = parseFloat(getComputedStyle(wrap).paddingBottom) || 0;
+    page.style.height = Math.max(360, window.innerHeight - top - gap - wrapPadB) + 'px';
+    const wrapBottom = wrap.getBoundingClientRect().bottom + scrollY;
+    app.style.paddingBottom = Math.max(0, window.innerHeight - wrapBottom - gap) + 'px';
+    const availW = stage.clientWidth - 4;
+    const availH = stage.clientHeight - 4;
+    const natW = box.offsetWidth;
+    const natH = box.offsetHeight;
+    if (!natW || !natH) return;
+    let s = Math.min(1, availW / natW, availH / natH);
+    s = Math.max(0.45, s);
+    stage.classList.toggle('is-scaled', s < 0.999);
+    if (s < 0.999) tbl.style.transform = 'scale(' + s.toFixed(4) + ')';
+    box.style.width = Math.floor(natW * s) + 'px';
+    box.style.height = Math.floor(natH * s) + 'px';
+  }
+  const tIds = [];
+  function scheduleFit() {
+    fitGen++;
+    const g = fitGen;
+    tIds.forEach(clearTimeout);
+    tIds.length = 0;
+    fit();
+    [60, 180].forEach(ms => tIds.push(setTimeout(() => { if (g === fitGen) fit(); }, ms)));
+  }
+  const onResize = () => scheduleFit();
+  window.addEventListener('resize', onResize);
 
   const render = () => {
     wrap.querySelector('#chart-gen').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.g === gen));
     wrap.querySelector('.calc-chart-head h2').textContent = '🧪 Tabla de tipos · ' + GEN_NAMES[gen];
-    wrap.querySelector('.chart-scroll').innerHTML = typeChartTable();
+    wrap.querySelector('.chart-stage').innerHTML = typeChartTable();
+    scheduleFit();
   };
 
   wrap.querySelector('#chart-gen').addEventListener('click', e => {
@@ -2566,6 +2612,17 @@ function viewTypeChart() {
   });
 
   app.appendChild(wrap);
+  const oldRoute = window.__typeChartCleanup;
+  if (oldRoute) window.removeEventListener('hashchange', oldRoute);
+  window.__typeChartCleanup = () => {
+    window.removeEventListener('resize', onResize);
+    tIds.forEach(clearTimeout);
+    fitGen++;
+    app.style.paddingBottom = prevPad;
+    if (footer) footer.style.display = prevFooter;
+    window.removeEventListener('hashchange', window.__typeChartCleanup);
+  };
+  window.addEventListener('hashchange', window.__typeChartCleanup);
   render();
 }
 
