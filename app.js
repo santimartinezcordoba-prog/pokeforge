@@ -2561,29 +2561,24 @@ function viewTypeChart() {
   function fit() {
     const page = wrap.querySelector('.calc-chart-page');
     const stage = wrap.querySelector('.chart-stage');
-    const box = stage && stage.querySelector('.typechart-scalebox');
     const tbl = stage && stage.querySelector('.typechart-table');
-    if (!page || !stage || !box || !tbl) return;
-    tbl.style.transform = '';
-    box.style.width = '';
-    box.style.height = '';
+    if (!page || !stage || !tbl) return;
     const top = page.getBoundingClientRect().top + scrollY;
     const gap = 20;
     const wrapPadB = parseFloat(getComputedStyle(wrap).paddingBottom) || 0;
     page.style.height = Math.max(360, window.innerHeight - top - gap - wrapPadB) + 'px';
     const wrapBottom = wrap.getBoundingClientRect().bottom + scrollY;
     app.style.paddingBottom = Math.max(0, window.innerHeight - wrapBottom - gap) + 'px';
-    const availW = stage.clientWidth - 4;
-    const availH = stage.clientHeight - 4;
-    const natW = box.offsetWidth;
-    const natH = box.offsetHeight;
-    if (!natW || !natH) return;
-    let s = Math.min(1, availW / natW, availH / natH);
-    s = Math.max(0.45, s);
-    stage.classList.toggle('is-scaled', s < 0.999);
-    if (s < 0.999) tbl.style.transform = 'scale(' + s.toFixed(4) + ')';
-    box.style.width = Math.floor(natW * s) + 'px';
-    box.style.height = Math.floor(natH * s) + 'px';
+    const nCols = tbl.rows[0] ? tbl.rows[0].cells.length : 1;
+    stage.style.setProperty('--cols', String(nCols));
+    const apply = () => {
+      const availW = stage.clientWidth - 2;
+      let cell = Math.floor(availW / nCols);
+      cell = Math.max(34, Math.min(68, cell));
+      stage.style.setProperty('--cell', cell + 'px');
+    };
+    apply();
+    apply();
   }
   const tIds = [];
   function scheduleFit() {
